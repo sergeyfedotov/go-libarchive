@@ -9,7 +9,6 @@ package archive
 */
 import "C"
 import (
-	"errors"
 	"io"
 	"sync"
 	"unsafe"
@@ -24,14 +23,14 @@ var readersLock sync.Mutex
 // Reader represents libarchive archive
 type Reader struct {
 	archive *C.struct_archive
-	reader  io.ReadSeeker // the io.Reader from which we Read
-	buffer  []byte        // buffer for the raw reading
-	offset  int64         // current reading offset
-	index   *uint64       // lookup index
+	reader  io.Reader // the io.Reader from which we Read
+	buffer  []byte    // buffer for the raw reading
+	offset  int64     // current reading offset
+	index   *uint64   // lookup index
 }
 
 // NewReader returns new Archive by calling archive_read_open
-func NewReader(reader io.ReadSeeker) (r *Reader, err error) {
+func NewReader(reader io.Reader) (r *Reader, err error) {
 	r = new(Reader)
 
 	readersLock.Lock()
@@ -45,9 +44,6 @@ func NewReader(reader io.ReadSeeker) (r *Reader, err error) {
 	r.archive = C.archive_read_new()
 	C.archive_read_support_filter_all(r.archive)
 	C.archive_read_support_format_all(r.archive)
-
-	seekCb := (*C.archive_seek_callback)(C.go_libarchive_seek)
-	C.archive_read_set_seek_callback(r.archive, seekCb)
 
 	r.reader = reader
 
@@ -87,20 +83,6 @@ func myread(_ *C.struct_archive, clientData unsafe.Pointer, block unsafe.Pointer
 	return C.ssize_t(read)
 }
 
-//export myseek
-func myseek(_ *C.struct_archive, clientData unsafe.Pointer, request C.int64_t, whence C.int) C.int64_t {
-	readersLock.Lock()
-	index := *(*uint64)(clientData)
-	reader := readers[index]
-	readersLock.Unlock()
-
-	offset, err := reader.reader.Seek(int64(request), int(whence))
-	if err != nil {
-		return C.int64_t(0)
-	}
-	return C.int64_t(offset)
-}
-
 // Next calls archive_read_next_header and returns an
 // interpretation of the Entry which is a wrapper around
 // libarchive's archive_entry, or Err.
@@ -132,26 +114,6 @@ func (r *Reader) Read(b []byte) (n int, err error) {
 	}
 	r.offset += int64(n)
 	return
-}
-
-// Seek sets the offset for the next Read to offset
-func (r *Reader) Seek(offset int64, whence int) (int64, error) {
-	var abs int64
-	switch whence {
-	case 0:
-		abs = offset
-	case 1:
-		abs = r.offset + offset
-	case 2:
-		abs = int64(len(r.buffer)) + offset
-	default:
-		return 0, errors.New("libarchive: SEEK [invalid whence]")
-	}
-	if abs < 0 {
-		return 0, errors.New("libarchive: SEEK [negative position]")
-	}
-	r.offset = abs
-	return abs, nil
 }
 
 // Size returns compressed size of the current archive entry
